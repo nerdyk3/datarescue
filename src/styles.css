@@ -246,7 +246,10 @@ body {
   height: 96px; display: grid; place-items: center; font-size: 34px;
   background: linear-gradient(135deg, #182236, #121826);
   border-bottom: 1px solid var(--border-soft);
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  transition: background-image 0.2s ease;
 }
+.fcard .thumb.has-img { font-size: 0; }
 .fcard.k-image .thumb { background: linear-gradient(135deg, #1f2b46, #16233f); }
 .fcard.k-video .thumb { background: linear-gradient(135deg, #2a1f46, #1c1636); }
 .fcard.k-audio .thumb { background: linear-gradient(135deg, #1f3b36, #16302b); }

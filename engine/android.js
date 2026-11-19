@@ -132,7 +132,29 @@ async function resetServer(adb) {
   await run(adb, ['start-server'], { timeout: 15000 });
 }
 
-async function status() {
+/**
+ * Discover Android phones advertising wireless debugging on the LAN via mDNS,
+ * and silently connect to any we've paired with before. This is what makes
+ * Wi-Fi "just work" with no IP typing — adb reuses the stored TLS pairing, so
+ * `adb connect` succeeds invisibly for a known phone.
+ */
+async function discoverWireless(adb) {
+  const res = await run(adb, ['mdns', 'services'], { timeout: 6000 });
+  const connected = [];
+  const lines = (res.out || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (!line.includes('_adb-tls-connect')) continue;
+    // e.g. "adb-abc123-xyz  _adb-tls-connect._tcp  192.168.1.42:37000"
+    const m = line.match(/(\d{1,3}(?:\.\d{1,3}){3}:\d+)/);
+    if (!m) continue;
+    const target = m[1];
+    const c = await run(adb, ['connect', target], { timeout: 8000 });
+    if (/connected to/i.test(c.out + c.err)) connected.push(target);
+  }
+  return connected;
+}
+
+async function status({ wireless = true } = {}) {
   const adb = await which('adb');
   if (!adb) {
     return {
@@ -160,7 +182,24 @@ async function status() {
     recovered = true;
   }
 
-  return { available: true, adb, devices: parseDevices(res.out), recovered };
+  // Auto-discover + silently connect wireless phones, then re-list if any joined.
+  let wirelessFound = [];
+  if (wireless) {
+    try {
+      wirelessFound = await discoverWireless(adb);
+      if (wirelessFound.length) {
+        res = await run(adb, ['devices', '-l'], { timeout: 12000 });
+      }
+    } catch (_) {}
+  }
+
+  return {
+    available: true,
+    adb,
+    devices: parseDevices(res.out),
+    recovered,
+    wirelessConnected: wirelessFound,
+  };
 }
 
 /** Connect to a phone over the network (wireless debugging / adb tcpip). */

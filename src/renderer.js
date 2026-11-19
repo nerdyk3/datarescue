@@ -80,8 +80,12 @@ document.querySelectorAll('.nav-item').forEach((b) => {
   b.addEventListener('click', () => selectSource(b.dataset.source));
 });
 
+let androidPoll = null;
+function stopAndroidPoll() { if (androidPoll) { clearInterval(androidPoll); androidPoll = null; } }
+
 function selectSource(src) {
   if (state.busy) { toast('Scan in progress', 'Stop the current task first.', 'warn'); return; }
+  stopAndroidPoll();
   state.source = src;
   state.files = [];
   state.selected.clear();
@@ -164,6 +168,13 @@ function renderSetup(src) {
     }));
     setup.appendChild(wifiCard());
     setup.appendChild(sectionList('androidDevices'));
+    // Detect automatically on open, then keep watching so a USB or Wi-Fi phone
+    // appears on its own — no button press, wireless connected invisibly.
+    startAndroidDetect();
+    stopAndroidPoll();
+    androidPoll = setInterval(() => {
+      if (state.source === 'android' && !state.busy) startAndroidDetect({ silent: true });
+    }, 6000);
   }
 
   if (src === 'ios') {
@@ -333,12 +344,35 @@ async function startFolder() {
   renderResults();
 }
 
-async function startAndroidDetect() {
+let androidDetecting = false;
+let lastWireless = '';
+
+async function startAndroidDetect(opts = {}) {
+  const { silent = false } = opts;
   const list = $('#androidDevices');
-  list.innerHTML = '<p style="color:var(--muted)"><span class="spinner"></span> Looking for devices…</p>';
-  const res = await rescue.androidStatus();
-  if (!res.ok) { list.innerHTML = `<p class="chip bad">${res.error}</p>`; return; }
-  if (res.recovered) toast('adb server restarted', 'Recovered a stuck adb server and re-scanned.', 'warn');
+  if (!list) return; // user navigated away
+  if (androidDetecting) return;
+  androidDetecting = true;
+  if (!silent) {
+    list.innerHTML = '<p style="color:var(--muted)"><span class="spinner"></span> Looking for devices (USB + Wi-Fi)…</p>';
+  }
+  let res;
+  try {
+    res = await rescue.androidStatus();
+  } finally {
+    androidDetecting = false;
+  }
+  if (!$('#androidDevices')) return; // navigated away during the await
+  if (!res.ok) { if (!silent) list.innerHTML = `<p class="chip bad">${res.error}</p>`; return; }
+  if (res.recovered && !silent) toast('adb server restarted', 'Recovered a stuck adb server and re-scanned.', 'warn');
+  // Announce newly auto-connected wireless phones (once per address set).
+  if (res.wirelessConnected && res.wirelessConnected.length) {
+    const key = res.wirelessConnected.slice().sort().join(',');
+    if (key !== lastWireless) {
+      lastWireless = key;
+      toast('Wi-Fi device connected', `Auto-connected over the network: ${res.wirelessConnected.join(', ')}`, 'ok');
+    }
+  }
   if (!res.available) {
     list.innerHTML = `<div><p class="chip warn">ADB not installed</p>
       <p style="margin-top:10px;color:var(--muted);font-size:13px">${res.reason}</p>
@@ -462,18 +496,73 @@ function renderResults() {
   $('#selectAll').checked = visible.length > 0 && visible.every((f) => state.selected.has(f.id));
 }
 
+// Thumbnail plumbing -------------------------------------------------------
+const PREVIEWABLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp']);
+const thumbCache = new Map(); // id -> dataURL | null (null = tried, undecodable)
+
+// Build the main-process request that yields this file's pixels, or null if
+// this source/type can't be previewed (e.g. Android remote files, HEIC/RAW).
+function thumbReqFor(f) {
+  if (!PREVIEWABLE.has((f.ext || '').toLowerCase())) return null;
+  if (state.source === 'folder' || state.source === 'trash') return { path: f.path };
+  if (state.source === 'ios') return { path: f.diskPath };
+  if (state.source === 'carve') {
+    return { source: state.ctx.source, offset: f.offset, length: f.length };
+  }
+  return null; // android: file is on the device, not locally readable
+}
+
+function paintThumb(thumbEl, url) {
+  thumbEl.style.backgroundImage = `url("${url}")`;
+  thumbEl.classList.add('has-img');
+  thumbEl.textContent = '';
+}
+
+const thumbObserver = ('IntersectionObserver' in window)
+  ? new IntersectionObserver((entries, obs) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const thumbEl = e.target;
+        obs.unobserve(thumbEl);
+        loadThumb(thumbEl);
+      }
+    }, { rootMargin: '300px' })
+  : null;
+
+async function loadThumb(thumbEl) {
+  const id = thumbEl.dataset.id;
+  if (thumbCache.has(id)) {
+    const cached = thumbCache.get(id);
+    if (cached) paintThumb(thumbEl, cached);
+    return;
+  }
+  const f = state.files.find((x) => String(x.id) === id);
+  if (!f) return;
+  const req = thumbReqFor(f);
+  if (!req) { thumbCache.set(id, null); return; }
+  const url = await rescue.thumb(req).catch(() => null);
+  thumbCache.set(id, url || null);
+  if (url && thumbEl.isConnected) paintThumb(thumbEl, url);
+}
+
 function fileCard(f) {
   const card = el('div', `fcard k-${f.kind} ${state.selected.has(f.id) ? 'selected' : ''}`);
   const sub = f.modified || f.deletedAt
     ? new Date(f.modified || f.deletedAt).toLocaleDateString()
     : (f.type || f.ext || '');
+  const canPreview = !!thumbReqFor(f);
   card.innerHTML = `
     <div class="check">✓</div>
-    <div class="thumb">${KIND_ICON[f.kind] || '📦'}</div>
+    <div class="thumb" data-id="${f.id}">${KIND_ICON[f.kind] || '📦'}</div>
     <div class="meta">
       <div class="fname" title="${f.name}">${f.name}</div>
       <div class="fsub"><span>${fmtSize(f.size != null ? f.size : f.length)}</span><span>${sub}</span></div>
     </div>`;
+  if (canPreview) {
+    const thumbEl = card.querySelector('.thumb');
+    if (thumbObserver) thumbObserver.observe(thumbEl);
+    else loadThumb(thumbEl); // no IO support: load immediately
+  }
   card.onclick = () => {
     if (state.selected.has(f.id)) state.selected.delete(f.id);
     else state.selected.add(f.id);

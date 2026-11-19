@@ -1,8 +1,9 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
+const fsp = require('fs/promises');
 
 const carver = require('./engine/carver');
 const trash = require('./engine/trash');
@@ -76,6 +77,39 @@ ipcMain.handle('open-path', async (_e, p) => {
 ipcMain.handle('stop', async () => {
   stopFlag = true;
   return true;
+});
+
+/* --------------------------- image thumbnails ----------------------------
+ * Returns a small data-URL thumbnail for an image, or null if it can't be
+ * decoded. Two modes:
+ *   { path }                     -> read an on-disk file (folder/trash/iOS)
+ *   { source, offset, length }   -> read a carved byte range from a device/image
+ * nativeImage decodes PNG/JPEG/GIF/BMP; anything else (HEIC, RAW…) returns null
+ * and the UI keeps its type icon.
+ */
+const MAX_THUMB_BYTES = 48 * 1024 * 1024; // don't decode absurdly large blobs
+ipcMain.handle('thumb', async (_e, req) => {
+  try {
+    let img;
+    if (req && req.path) {
+      img = nativeImage.createFromPath(req.path);
+    } else if (req && req.source && req.length && req.length <= MAX_THUMB_BYTES) {
+      const fd = await fsp.open(req.source, 'r');
+      try {
+        const buf = Buffer.alloc(req.length);
+        await fd.read(buf, 0, req.length, req.offset);
+        img = nativeImage.createFromBuffer(buf);
+      } finally {
+        await fd.close();
+      }
+    }
+    if (!img || img.isEmpty()) return null;
+    const { width } = img.getSize();
+    const thumb = width > 320 ? img.resize({ width: 320, quality: 'good' }) : img;
+    return thumb.toDataURL();
+  } catch (_) {
+    return null;
+  }
 });
 
 /* -------------------------------- carving --------------------------------- */

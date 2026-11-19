@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   stop: () => ipcRenderer.invoke('stop'),
+  thumb: (req) => ipcRenderer.invoke('thumb', req),
 
   // carving
   carveScan: (source) => ipcRenderer.invoke('carve-scan', source),
