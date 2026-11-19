@@ -1,0 +1,19 @@
+{
+  "name": "datarescue",
+  "version": "1.0.0",
+  "description": "DataRescue — cross-platform data recovery for PC, Android and iOS",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "@electron/rebuild": "^3.6.0"
+  }
+}

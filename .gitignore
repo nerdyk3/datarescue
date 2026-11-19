@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Recovered data (never commit people's recovered files)
+DataRescue_Recovered/
+*.recovered/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Env
+.env
+.env.local

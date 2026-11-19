@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DataRescue</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Z"
+                  fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="m8.5 12 2.5 2.5L16 9.5" fill="none" stroke="currentColor"
+                  stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <strong>DataRescue</strong>
+          <span>Recovery Studio</span>
+        </div>
+      </div>
+
+      <nav class="nav" id="nav">
+        <p class="nav-label">Sources</p>
+        <button class="nav-item active" data-source="carve">
+          <span class="ni-icon">🖥️</span>
+          <span class="ni-body"><span class="ni-title">PC Drive / Image</span>
+            <span class="ni-sub">Deep carve raw disks</span></span>
+        </button>
+        <button class="nav-item" data-source="trash">
+          <span class="ni-icon">🗑️</span>
+          <span class="ni-body"><span class="ni-title">Trash / Recycle Bin</span>
+            <span class="ni-sub">Intact deleted files</span></span>
+        </button>
+        <button class="nav-item" data-source="folder">
+          <span class="ni-icon">📁</span>
+          <span class="ni-body"><span class="ni-title">Folder / Volume</span>
+            <span class="ni-sub">Index & rescue by type</span></span>
+        </button>
+        <button class="nav-item" data-source="android">
+          <span class="ni-icon">🤖</span>
+          <span class="ni-body"><span class="ni-title">Android Phone</span>
+            <span class="ni-sub">Pull media over ADB</span></span>
+        </button>
+        <button class="nav-item" data-source="ios">
+          <span class="ni-icon">📱</span>
+          <span class="ni-body"><span class="ni-title">iPhone / iPad</span>
+            <span class="ni-sub">Extract local backups</span></span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="disclaimer">
+          Recovered files are copied out — your source is never modified.
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <header class="topbar">
+        <div class="tb-titles">
+          <h1 id="panelTitle">PC Drive / Image</h1>
+          <p id="panelSubtitle">Reconstruct files from a raw disk, device, or forensic image.</p>
+        </div>
+        <div class="tb-actions" id="tbActions"></div>
+      </header>
+
+      <!-- Setup / source card -->
+      <section class="setup" id="setup"></section>
+
+      <!-- Progress -->
+      <section class="progress-wrap" id="progressWrap" hidden>
+        <div class="progress-head">
+          <span id="progressLabel">Scanning…</span>
+          <button class="btn ghost sm" id="stopBtn">Stop</button>
+        </div>
+        <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="progress-detail" id="progressDetail"></div>
+      </section>
+
+      <!-- Results -->
+      <section class="results" id="results" hidden>
+        <div class="results-toolbar">
+          <div class="filters" id="filters"></div>
+          <div class="results-tools">
+            <label class="selectall">
+              <input type="checkbox" id="selectAll" /> Select all
+            </label>
+            <span class="result-count" id="resultCount">0 files</span>
+            <button class="btn primary" id="recoverBtn" disabled>Recover selected</button>
+          </div>
+        </div>
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="emptyState" hidden>
+          <div class="empty-glow"></div>
+          <p>No recoverable files found here yet.</p>
+          <span>Try another source or a deeper scan target.</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toasts -->
+  <div class="toasts" id="toasts"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
