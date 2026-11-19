@@ -293,17 +293,28 @@ async function startAndroidDetect() {
     return;
   }
   if (!res.devices.length) {
-    list.innerHTML = `<p class="chip warn">No device connected</p>
-      <p style="margin-top:10px;color:var(--muted);font-size:13px">Connect your phone by USB, then tap “Allow USB debugging” on it and detect again.</p>`;
+    list.innerHTML = `<p class="chip warn">adb is ready — but no device is visible</p>
+      <p style="margin-top:12px;color:var(--muted);font-size:13px">Work through this checklist, then press <strong>Detect device</strong> again:</p>
+      <ol style="margin:10px 0 2px 18px;color:var(--muted);font-size:13px;line-height:1.9">
+        <li>Connect the phone with a <strong>data</strong> USB cable (charge-only cables won’t work).</li>
+        <li>On the phone: Settings → About phone → tap <strong>Build number</strong> 7× to unlock Developer options.</li>
+        <li>Settings → System → <strong>Developer options → enable USB debugging</strong>.</li>
+        <li>Set the USB mode to <strong>File Transfer / MTP</strong> (not “charge only”).</li>
+        <li>When the phone shows <em>“Allow USB debugging?”</em>, tap <strong>Allow</strong> (tick “always”).</li>
+      </ol>
+      <p style="margin-top:8px;color:var(--muted-2);font-size:12px">A device stuck on <code>unauthorized</code> means step 5 wasn’t accepted yet.</p>`;
     return;
   }
   list.innerHTML = '';
   res.devices.forEach((d) => {
     const row = el('div', 'devrow');
     const ready = d.state === 'device';
+    const hint = d.state === 'unauthorized'
+      ? 'Tap “Allow USB debugging” on the phone'
+      : d.state === 'offline' ? 'Reconnect the cable' : d.state;
     row.innerHTML = `<div class="dev-ic">📱</div>
-      <div class="dev-main"><strong>${d.model}</strong><span>${d.serial} · ${d.state}</span></div>
-      <button class="btn ${ready ? 'primary' : ''} sm">${ready ? 'Scan media' : d.state}</button>`;
+      <div class="dev-main"><strong>${d.model}</strong><span>${d.serial} · ${ready ? 'ready' : hint}</span></div>
+      <button class="btn ${ready ? 'primary' : ''} sm" ${ready ? '' : 'disabled'}>${ready ? 'Scan media' : d.state}</button>`;
     if (ready) row.querySelector('button').onclick = () => startAndroidScan(d.serial);
     list.appendChild(row);
   });

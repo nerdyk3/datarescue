@@ -12,9 +12,61 @@
 
 const { spawn, execFile } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const fsp = require('fs/promises');
+const os = require('os');
 
-function which(cmd) {
+const EXE = process.platform === 'win32' ? 'adb.exe' : 'adb';
+
+/**
+ * Candidate directories where adb commonly lives, so detection works even when
+ * the app is launched from Finder/Dock (which gives a GUI app a stripped PATH
+ * that contains none of Homebrew, the Android SDK, or the user's shell PATH).
+ */
+function candidateDirs() {
+  const home = os.homedir();
+  const dirs = [];
+  const sdks = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    path.join(home, 'Library', 'Android', 'sdk'),      // macOS Android Studio
+    path.join(home, 'Android', 'Sdk'),                 // Linux Android Studio
+    path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk'), // Windows
+  ].filter(Boolean);
+  for (const s of sdks) dirs.push(path.join(s, 'platform-tools'));
+
+  dirs.push(
+    '/opt/homebrew/bin',            // Apple-silicon Homebrew
+    '/usr/local/bin',               // Intel Homebrew
+    '/usr/bin', '/bin',
+    path.join(home, 'platform-tools'),
+    'C:\\platform-tools',
+    'C:\\Android\\platform-tools'
+  );
+  // Anything already on PATH, too.
+  (process.env.PATH || '').split(path.delimiter).forEach((d) => d && dirs.push(d));
+  return [...new Set(dirs)];
+}
+
+let _adbCache;
+function findAdb() {
+  if (_adbCache !== undefined) return _adbCache;
+  for (const dir of candidateDirs()) {
+    const full = path.join(dir, EXE);
+    try {
+      if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+        _adbCache = full;
+        return full;
+      }
+    } catch (_) {}
+  }
+  _adbCache = null;
+  return null;
+}
+
+// Back-compat shim: resolve adb regardless of the name requested.
+async function which(cmd) {
+  if (cmd === 'adb') return findAdb();
   return new Promise((resolve) => {
     execFile(process.platform === 'win32' ? 'where' : 'which', [cmd], (err, out) => {
       resolve(err ? null : out.toString().trim().split(/\r?\n/)[0]);
@@ -26,7 +78,13 @@ function run(bin, args, { timeout = 120000 } = {}) {
   return new Promise((resolve) => {
     let out = '';
     let err = '';
-    const p = spawn(bin, args);
+    // Make sure the binary's own directory is on PATH for any helper it spawns.
+    const env = { ...process.env };
+    try {
+      const dir = path.dirname(bin);
+      env.PATH = `${dir}${path.delimiter}${env.PATH || ''}`;
+    } catch (_) {}
+    const p = spawn(bin, args, { env });
     const timer = setTimeout(() => p.kill(), timeout);
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
@@ -46,10 +104,12 @@ async function status() {
   if (!adb) {
     return {
       available: false,
-      reason: 'adb (Android Platform Tools) is not installed or not on PATH.',
+      reason: 'Could not find the adb binary (searched Homebrew, the Android SDK, ANDROID_HOME and PATH).',
       install: process.platform === 'darwin'
-        ? 'brew install android-platform-tools'
-        : 'Install Android SDK Platform Tools from developer.android.com.',
+        ? 'Install with: brew install android-platform-tools'
+        : process.platform === 'win32'
+          ? 'Install Android SDK Platform Tools and add them to PATH, or drop adb.exe in C:\\platform-tools.'
+          : 'Install Android SDK Platform Tools from developer.android.com.',
       devices: [],
     };
   }
