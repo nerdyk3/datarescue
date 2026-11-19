@@ -5,7 +5,10 @@
  *  through window.api (see preload.js).
  * ======================================================================== */
 
-const api = window.api;
+// NOTE: must NOT be named `api` — contextBridge exposes a non-configurable
+// `api` property on window, and a top-level `const api` would collide and throw
+// a SyntaxError that kills the whole script.
+const rescue = window.api;
 
 const KIND_ICON = {
   image: '🖼️', video: '🎬', audio: '🎵', document: '📄',
@@ -109,7 +112,7 @@ function renderSetup(src) {
       p: 'Point DataRescue at a whole disk, an external drive, an SD card, or a <code>.dd</code>/<code>.img</code> image. It scans the raw bytes for file signatures and rebuilds photos, videos, documents and archives — independent of any filesystem. This recovers data even after formatting or deletion.',
       meta: ['JPEG · PNG · HEIC', 'MP4 · MOV', 'PDF · DOCX · XLSX', 'ZIP · SQLite'],
       cta: primaryPick('Select disk / image', async () => {
-        const p = await api.pickSource();
+        const p = await rescue.pickSource();
         if (!p) return;
         state.ctx.source = p;
         $('#srcPath').textContent = p;
@@ -143,7 +146,7 @@ function renderSetup(src) {
       p: 'Great for a drive that still mounts but whose files you can’t find. Pick a folder or volume and DataRescue indexes everything, grouped by type and sorted by most-recently-modified.',
       meta: ['External drives', 'SD cards', 'Network shares', 'Any folder'],
       cta: primaryPick('Choose folder & scan', async () => {
-        const p = await api.pickFolder();
+        const p = await rescue.pickFolder();
         if (!p) return;
         state.ctx.root = p;
         startFolder();
@@ -227,7 +230,7 @@ function hideProgress() {
   $('#progressWrap').hidden = true;
 }
 
-api.onProgress((p) => {
+rescue.onProgress((p) => {
   if (p.phase === 'scan' && p.total > 0) {
     setProgress((p.bytes / p.total) * 100, `Scanned ${fmtSize(p.bytes)} of ${fmtSize(p.total)}`);
   } else if (p.phase === 'scan' && p.current) {
@@ -242,7 +245,7 @@ api.onProgress((p) => {
 });
 
 $('#stopBtn').onclick = async () => {
-  await api.stop();
+  await rescue.stop();
   toast('Stopping…', 'The current task will halt shortly.', 'warn');
 };
 
@@ -250,7 +253,7 @@ $('#stopBtn').onclick = async () => {
 
 async function startCarve() {
   showProgress('Scanning raw bytes for recoverable files…', false);
-  const res = await api.carveScan(state.ctx.source);
+  const res = await rescue.carveScan(state.ctx.source);
   hideProgress();
   if (!res.ok) { toast('Scan failed', res.error, 'err'); return; }
   state.files = res.files;
@@ -260,7 +263,7 @@ async function startCarve() {
 
 async function startTrash() {
   showProgress('Reading the trash…');
-  const res = await api.trashList();
+  const res = await rescue.trashList();
   hideProgress();
   if (!res.ok) { toast('Could not read trash', res.error, 'err'); return; }
   if (!res.supported) { toast('No trash found', 'No trash folder on this system.', 'warn'); }
@@ -270,7 +273,7 @@ async function startTrash() {
 
 async function startFolder() {
   showProgress('Indexing folder…');
-  const res = await api.folderScan({ root: state.ctx.root, kinds: null });
+  const res = await rescue.folderScan({ root: state.ctx.root, kinds: null });
   hideProgress();
   if (!res.ok) { toast('Scan failed', res.error, 'err'); return; }
   state.files = res.files;
@@ -281,7 +284,7 @@ async function startFolder() {
 async function startAndroidDetect() {
   const list = $('#androidDevices');
   list.innerHTML = '<p style="color:var(--muted)"><span class="spinner"></span> Looking for devices…</p>';
-  const res = await api.androidStatus();
+  const res = await rescue.androidStatus();
   if (!res.ok) { list.innerHTML = `<p class="chip bad">${res.error}</p>`; return; }
   if (!res.available) {
     list.innerHTML = `<div><p class="chip warn">ADB not installed</p>
@@ -309,7 +312,7 @@ async function startAndroidDetect() {
 async function startAndroidScan(serial) {
   state.ctx.serial = serial;
   showProgress('Reading shared storage over ADB…');
-  const res = await api.androidScan({ serial });
+  const res = await rescue.androidScan({ serial });
   hideProgress();
   if (!res.ok) { toast('Scan failed', res.error, 'err'); return; }
   state.files = res.files;
@@ -320,7 +323,7 @@ async function startAndroidScan(serial) {
 async function startIosDetect() {
   const list = $('#iosBackups');
   list.innerHTML = '<p style="color:var(--muted)"><span class="spinner"></span> Searching for backups…</p>';
-  const res = await api.iosBackups();
+  const res = await rescue.iosBackups();
   if (!res.ok) { list.innerHTML = `<p class="chip bad">${res.error}</p>`; return; }
   if (!res.supported || !res.backups.length) {
     list.innerHTML = `<p class="chip warn">No local backups found</p>
@@ -344,7 +347,7 @@ async function startIosDetect() {
 async function startIosScan(udid) {
   state.ctx.udid = udid;
   showProgress('Parsing backup index…');
-  const res = await api.iosScan({ udid, kinds: null });
+  const res = await rescue.iosScan({ udid, kinds: null });
   hideProgress();
   if (!res.ok) { toast('Could not read backup', res.error, 'err'); return; }
   state.files = res.files;
@@ -439,15 +442,15 @@ $('#recoverBtn').onclick = async () => {
   let res;
   try {
     if (state.source === 'carve') {
-      res = await api.carveRecover({ source: state.ctx.source, files: chosen });
+      res = await rescue.carveRecover({ source: state.ctx.source, files: chosen });
     } else if (state.source === 'trash') {
-      res = await api.trashRestore({ files: chosen });
+      res = await rescue.trashRestore({ files: chosen });
     } else if (state.source === 'folder') {
-      res = await api.folderCopy({ files: chosen });
+      res = await rescue.folderCopy({ files: chosen });
     } else if (state.source === 'android') {
-      res = await api.androidPull({ serial: state.ctx.serial, files: chosen });
+      res = await rescue.androidPull({ serial: state.ctx.serial, files: chosen });
     } else if (state.source === 'ios') {
-      res = await api.iosExtract({ udid: state.ctx.udid, files: chosen });
+      res = await rescue.iosExtract({ udid: state.ctx.udid, files: chosen });
     }
   } catch (err) {
     hideProgress(); toast('Recovery error', String(err), 'err'); return;
@@ -457,7 +460,7 @@ $('#recoverBtn').onclick = async () => {
   const ok = res.results.filter((r) => r.ok).length;
   toast('Recovery complete', `${ok}/${res.results.length} files saved. Click to open the folder.`, 'ok', 7000);
   const last = $('#toasts').lastChild;
-  if (last) { last.style.cursor = 'pointer'; last.onclick = () => api.openPath(res.outputDir); }
+  if (last) { last.style.cursor = 'pointer'; last.onclick = () => rescue.openPath(res.outputDir); }
 };
 
 /* -------------------------------- boot ---------------------------------- */
