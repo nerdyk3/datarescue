@@ -168,6 +168,22 @@ ipcMain.handle('android-status', async () => {
   }
 });
 
+ipcMain.handle('android-connect', async (_e, { hostPort }) => {
+  try {
+    return { ok: true, ...(await android.connect(hostPort)) };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('android-pair', async (_e, { hostPort, code }) => {
+  try {
+    return { ok: true, ...(await android.pair(hostPort, code)) };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
 ipcMain.handle('android-scan', async (_e, { serial }) => {
   try {
     const res = await android.scan(serial, {

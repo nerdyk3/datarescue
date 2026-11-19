@@ -162,6 +162,7 @@ function renderSetup(src) {
       meta: ['Photos & videos', 'WhatsApp media', 'Downloads', 'No root needed'],
       cta: primaryPick('Detect device', startAndroidDetect),
     }));
+    setup.appendChild(wifiCard());
     setup.appendChild(sectionList('androidDevices'));
   }
 
@@ -175,6 +176,57 @@ function renderSetup(src) {
     }));
     setup.appendChild(sectionList('iosBackups'));
   }
+}
+
+function wifiCard() {
+  const card = el('div', 'card');
+  card.style.marginTop = '14px';
+  card.innerHTML = `
+    <h2 style="font-size:15px;margin-bottom:6px">📶 Connect over Wi-Fi (wireless debugging)</h2>
+    <p style="color:var(--muted);font-size:13px;line-height:1.55;max-width:66ch">
+      Same Wi-Fi as this computer. On the phone: <strong>Developer options → Wireless debugging</strong>.
+      For the first pairing, use “Pair device with pairing code” and enter that
+      <em>IP:port</em> + 6-digit code below. After that, just connect to the
+      phone's main <em>IP:port</em> shown under Wireless debugging.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;align-items:flex-end">
+      <label style="font-size:12px;color:var(--muted-2)">Pair address &amp; code (first time only)
+        <div style="display:flex;gap:8px;margin-top:5px">
+          <input id="pairAddr" placeholder="192.168.1.42:37123" class="wifi-in" />
+          <input id="pairCode" placeholder="123456" class="wifi-in" style="width:90px" />
+          <button class="btn sm" id="pairBtn">Pair</button>
+        </div>
+      </label>
+      <label style="font-size:12px;color:var(--muted-2)">Connect address
+        <div style="display:flex;gap:8px;margin-top:5px">
+          <input id="wifiAddr" placeholder="192.168.1.42:5555" class="wifi-in" />
+          <button class="btn primary sm" id="wifiBtn">Connect</button>
+        </div>
+      </label>
+    </div>
+    <div id="wifiMsg" style="margin-top:10px;font-size:12px;font-family:ui-monospace;color:var(--muted-2);min-height:14px"></div>`;
+
+  card.querySelector('#wifiBtn').onclick = async () => {
+    const addr = card.querySelector('#wifiAddr').value.trim();
+    if (!addr) return;
+    const msg = card.querySelector('#wifiMsg');
+    msg.textContent = 'Connecting…';
+    const res = await rescue.androidConnect({ hostPort: addr });
+    msg.textContent = res.ok ? `✓ ${res.message}` : `✗ ${res.message || res.error}`;
+    if (res.ok) { toast('Connected', res.message, 'ok'); startAndroidDetect(); }
+    else toast('Connect failed', res.message || res.error, 'err');
+  };
+  card.querySelector('#pairBtn').onclick = async () => {
+    const addr = card.querySelector('#pairAddr').value.trim();
+    const code = card.querySelector('#pairCode').value.trim();
+    if (!addr || !code) return;
+    const msg = card.querySelector('#wifiMsg');
+    msg.textContent = 'Pairing…';
+    const res = await rescue.androidPair({ hostPort: addr, code });
+    msg.textContent = res.ok ? `✓ ${res.message}` : `✗ ${res.message || res.error}`;
+    toast(res.ok ? 'Paired' : 'Pair failed', res.message || res.error, res.ok ? 'ok' : 'err');
+  };
+  return card;
 }
 
 function heroCard({ art, h2, p, meta, cta }) {
@@ -286,6 +338,7 @@ async function startAndroidDetect() {
   list.innerHTML = '<p style="color:var(--muted)"><span class="spinner"></span> Looking for devices…</p>';
   const res = await rescue.androidStatus();
   if (!res.ok) { list.innerHTML = `<p class="chip bad">${res.error}</p>`; return; }
+  if (res.recovered) toast('adb server restarted', 'Recovered a stuck adb server and re-scanned.', 'warn');
   if (!res.available) {
     list.innerHTML = `<div><p class="chip warn">ADB not installed</p>
       <p style="margin-top:10px;color:var(--muted);font-size:13px">${res.reason}</p>

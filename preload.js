@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // android
   androidStatus: () => ipcRenderer.invoke('android-status'),
+  androidConnect: (args) => ipcRenderer.invoke('android-connect', args),
+  androidPair: (args) => ipcRenderer.invoke('android-pair', args),
   androidScan: (args) => ipcRenderer.invoke('android-scan', args),
   androidPull: (args) => ipcRenderer.invoke('android-pull', args),
 

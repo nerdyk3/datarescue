@@ -85,18 +85,51 @@ function run(bin, args, { timeout = 120000 } = {}) {
       env.PATH = `${dir}${path.delimiter}${env.PATH || ''}`;
     } catch (_) {}
     const p = spawn(bin, args, { env });
-    const timer = setTimeout(() => p.kill(), timeout);
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (err += d));
-    p.on('error', (e) => {
-      clearTimeout(timer);
-      resolve({ code: -1, out, err: String(e) });
-    });
-    p.on('close', (code) => {
+    let done = false;
+    const finish = (code) => {
+      if (done) return;
+      done = true;
       clearTimeout(timer);
       resolve({ code, out, err });
-    });
+    };
+    const timer = setTimeout(() => { try { p.kill(); } catch (_) {} finish(-2); }, timeout);
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', (e) => { err += String(e); finish(-1); });
+    // Resolve on 'exit' (the adb CLI process has terminated), NOT 'close'.
+    // adb forks a background daemon that inherits our stdio pipes and holds
+    // them open, so 'close' (stdio EOF) never fires until the timeout — which
+    // made every adb call block for the full timeout. 'exit' fires as soon as
+    // the CLI finishes; a tiny delay lets the last stdout chunk flush.
+    p.on('exit', (code) => setTimeout(() => finish(code), 40));
   });
+}
+
+function parseDevices(out) {
+  return out
+    .split(/\r?\n/)
+    .slice(1) // drop "List of devices attached"
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !l.startsWith('*') && !l.startsWith('adb '))
+    .map((l) => {
+      const [serial, state, ...rest] = l.split(/\s+/);
+      const model = (rest.find((r) => r.startsWith('model:')) || '')
+        .replace('model:', '').replace(/_/g, ' ');
+      const network = /:\d+$/.test(serial || '');
+      return { serial, state, model: model || (network ? 'Wi-Fi device' : 'Android device'), network };
+    })
+    .filter((d) => d.serial);
+}
+
+/**
+ * Kill and restart the adb server with OUR binary. This recovers from a server
+ * left wedged by a different adb version (e.g. Android Studio's) fighting over
+ * port 5037 — the usual cause of `adb devices` hanging with no output.
+ */
+async function resetServer(adb) {
+  await run(adb, ['kill-server'], { timeout: 8000 });
+  await run(adb, ['start-server'], { timeout: 15000 });
 }
 
 async function status() {
@@ -113,19 +146,42 @@ async function status() {
       devices: [],
     };
   }
-  const res = await run(adb, ['devices', '-l']);
-  const devices = res.out
-    .split(/\r?\n/)
-    .slice(1)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .filter((l) => !l.startsWith('*'))
-    .map((l) => {
-      const [serial, state, ...rest] = l.split(/\s+/);
-      const model = (rest.find((r) => r.startsWith('model:')) || '').replace('model:', '');
-      return { serial, state, model: model || 'Android device' };
-    });
-  return { available: true, adb, devices };
+
+  // First attempt with a short timeout so a wedged server can't freeze the UI.
+  let res = await run(adb, ['devices', '-l'], { timeout: 12000 });
+  let recovered = false;
+
+  // Timed out (-2) or errored, or emitted a version-mismatch restart notice →
+  // reset the server and try once more.
+  const mismatch = /version|killing|out of date|cannot connect|daemon/i.test(res.err || '');
+  if (res.code === -2 || res.code !== 0 || mismatch) {
+    await resetServer(adb);
+    res = await run(adb, ['devices', '-l'], { timeout: 15000 });
+    recovered = true;
+  }
+
+  return { available: true, adb, devices: parseDevices(res.out), recovered };
+}
+
+/** Connect to a phone over the network (wireless debugging / adb tcpip). */
+async function connect(hostPort) {
+  const adb = await which('adb');
+  if (!adb) throw new Error('adb not found');
+  const target = /:\d+$/.test(hostPort) ? hostPort : `${hostPort}:5555`;
+  const res = await run(adb, ['connect', target], { timeout: 15000 });
+  const text = (res.out + res.err).trim();
+  const ok = /connected to/i.test(text) && !/cannot|failed|refused/i.test(text);
+  return { ok, message: text || 'No response from adb connect.', target };
+}
+
+/** Pair with a phone using Android 11+ Wireless debugging (IP:PORT + 6-digit code). */
+async function pair(hostPort, code) {
+  const adb = await which('adb');
+  if (!adb) throw new Error('adb not found');
+  const res = await run(adb, ['pair', hostPort, code], { timeout: 20000 });
+  const text = (res.out + res.err).trim();
+  const ok = /successfully paired/i.test(text);
+  return { ok, message: text || 'No response from adb pair.' };
 }
 
 const MEDIA_DIRS = [
@@ -202,4 +258,4 @@ async function pull(serial, files, outputDir, { onProgress } = {}) {
   return results;
 }
 
-module.exports = { status, scan, pull };
+module.exports = { status, scan, pull, connect, pair, resetServer };
