@@ -68,9 +68,10 @@ function download(url, dest, redirects = 0) {
   const extractDir = path.join(tmp, 'ex');
   fs.mkdirSync(extractDir, { recursive: true });
   if (PLATFORM === 'win32') {
-    // PowerShell Expand-Archive is available on all supported Windows.
-    execFileSync('powershell', ['-NoProfile', '-Command',
-      `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${extractDir}' -Force`], { stdio: 'inherit' });
+    // Windows 10+ ships bsdtar (tar.exe), which extracts zips reliably. We avoid
+    // PowerShell's Expand-Archive: it hits a known ExtractToDirectory overload
+    // bug in PowerShell 7 on some archives.
+    execFileSync('tar', ['-xf', zip, '-C', extractDir, ...wanted], { stdio: 'inherit' });
   } else {
     execFileSync('unzip', ['-o', zip, ...wanted, '-d', extractDir], { stdio: 'inherit' });
   }
