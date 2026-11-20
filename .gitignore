@@ -6,6 +6,9 @@ dist/
 out/
 build/
 
+# Bundled adb (downloaded at build time by scripts/fetch-adb.js)
+vendor/
+
 # Recovered data (never commit people's recovered files)
 DataRescue_Recovered/
 *.recovered/

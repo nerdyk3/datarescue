@@ -21,7 +21,19 @@ Node.js code that reads raw devices, drives `adb`, and parses iOS backups.
 
 ---
 
-## 🚀 Getting started
+## 📦 Install (prebuilt)
+
+Grab an installer for your OS from the [Releases page](https://github.com/nerdyk3/datarescue/releases):
+
+| OS | File | Notes |
+|----|------|-------|
+| **macOS** | `DataRescue-<ver>.dmg` | Universal (Apple Silicon + Intel). Unsigned — right-click → **Open** the first time. |
+| **Windows** | `DataRescue-<ver>-Setup.exe` | NSIS installer, choose-your-folder. |
+| **Linux** | `DataRescue-<ver>.AppImage` / `.deb` | AppImage: `chmod +x` then run. |
+
+`adb` is **bundled inside the app**, so Android recovery works with nothing extra to install.
+
+## 🚀 Run from source
 
 ```bash
 cd datarescue
@@ -83,6 +95,39 @@ The engine is deliberately decoupled from Electron so it can be tested from plai
   DataRescue recovers everything still present in `/sdcard`.
 
 ---
+
+## 🏭 Building installers yourself
+
+Each OS is built on its own machine (you can't cross-build the native
+`better-sqlite3` module or the platform installers reliably from another OS).
+
+```bash
+npm install
+npm run dist:mac      # → dist/DataRescue-<ver>.dmg + .zip   (run on macOS)
+npm run dist:win      # → dist/DataRescue-<ver>-Setup.exe    (run on Windows)
+npm run dist:linux    # → dist/DataRescue-<ver>.AppImage/.deb (run on Linux)
+```
+
+Every `dist:*` script first runs `npm run bundle:adb`, which downloads the
+official Android platform-tools for that OS and bundles `adb` into the app
+(`scripts/fetch-adb.js`). The app icon is generated from code by
+`npm run make:icon` (`assets/icon.png`).
+
+### All three at once (CI)
+
+`.github/workflows/build.yml` builds macOS, Windows and Linux in parallel on
+GitHub-hosted runners:
+
+- **Manually:** Actions → *Build installers* → **Run workflow** → download the
+  artifacts.
+- **On a tag:** `git tag v1.0.0 && git push --tags` builds all three and
+  attaches the installers to a GitHub Release automatically.
+
+### Signing / notarization
+
+CI builds are **unsigned** (`CSC_IDENTITY_AUTO_DISCOVERY=false`). To ship signed
+builds, provide the usual electron-builder secrets (Apple `CSC_LINK` /
+`CSC_KEY_PASSWORD` + notarization creds on macOS, a code-signing cert on Windows).
 
 ## 📄 License
 

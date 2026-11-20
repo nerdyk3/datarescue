@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Load the native better-sqlite3 .node module and the bundled adb binary,
+       which aren't signed by this team, under the hardened runtime. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <!-- The app is intentionally NOT sandboxed: a recovery tool needs full read
+       access to disks, folders and backups the user points it at. -->
+</dict>
+</plist>

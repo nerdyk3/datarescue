@@ -3,17 +3,111 @@
   "version": "1.0.0",
   "description": "DataRescue — cross-platform data recovery for PC, Android and iOS",
   "main": "main.js",
-  "author": "",
+  "author": "nerdyk3",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nerdyk3/datarescue.git"
+  },
   "scripts": {
     "start": "electron .",
-    "rebuild": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "make:icon": "node scripts/make-icon.js",
+    "bundle:adb": "node scripts/fetch-adb.js",
+    "pack": "npm run bundle:adb && electron-builder --dir",
+    "dist": "npm run bundle:adb && electron-builder",
+    "dist:mac": "npm run bundle:adb && electron-builder --mac",
+    "dist:win": "npm run bundle:adb && electron-builder --win",
+    "dist:linux": "npm run bundle:adb && electron-builder --linux"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "electron": "^33.0.0",
-    "@electron/rebuild": "^3.6.0"
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.nerdyk3.datarescue",
+    "productName": "DataRescue",
+    "copyright": "Copyright © 2026 nerdyk3",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "engine/**/*",
+      "src/**/*",
+      "!**/*.map",
+      "!**/{.DS_Store,Thumbs.db}"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/adb",
+        "to": "platform-tools",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "npmRebuild": true,
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "DataRescue ${version}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "nerdyk3 <noreply@users.noreply.github.com>",
+      "synopsis": "Cross-platform data recovery for PC, Android and iOS"
+    }
   }
 }

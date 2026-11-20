@@ -27,6 +27,11 @@ const EXE = process.platform === 'win32' ? 'adb.exe' : 'adb';
 function candidateDirs() {
   const home = os.homedir();
   const dirs = [];
+  // Prefer adb bundled inside the packaged app (resources/platform-tools), then
+  // the dev-time vendored copy from `npm run bundle:adb`, so Android recovery
+  // works with no separate adb install.
+  if (process.resourcesPath) dirs.push(path.join(process.resourcesPath, 'platform-tools'));
+  dirs.push(path.join(__dirname, '..', 'vendor', 'adb'));
   const sdks = [
     process.env.ANDROID_HOME,
     process.env.ANDROID_SDK_ROOT,
