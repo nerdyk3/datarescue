@@ -14,17 +14,30 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { SIGNATURES, MAX_HEADER_SPAN } = require('./signatures');
+const { SIGNATURES, MAX_HEADER_SPAN, buildIndex } = require('./signatures');
 
 const CHUNK = 4 * 1024 * 1024; // 4 MiB read window
+const INDEX = buildIndex(SIGNATURES);
 
-function matchAt(buf, pos, sig) {
-  const at = pos + (sig.headerAt || 0);
+function headerMatches(buf, at, sig) {
   if (at + sig.header.length > buf.length) return false;
   for (let i = 0; i < sig.header.length; i++) {
     if (buf[at + i] !== sig.header[i]) return false;
   }
   return true;
+}
+
+/**
+ * Build an on-demand reader bound to an open fd. Resolvers use it to peek at a
+ * file's internal size fields; returns a Buffer that may be short at EOF.
+ */
+function makeReader(fd) {
+  return async (pos, len) => {
+    if (len <= 0) return Buffer.alloc(0);
+    const buf = Buffer.alloc(len);
+    const { bytesRead } = await fd.read(buf, 0, len, pos);
+    return buf.subarray(0, bytesRead);
+  };
 }
 
 async function sourceSize(fd, fallbackPath) {
@@ -68,12 +81,20 @@ async function scanHeaders(source, { onProgress, shouldStop } = {}) {
       const limit = isLast ? search.length : search.length - overlap;
 
       for (let i = 0; i < limit; i++) {
-        for (const sig of SIGNATURES) {
-          if (matchAt(search, i, sig)) {
-            found.push({ offset: windowBase + i, sig });
-            break; // first matching signature wins at this byte
+        // Only test signatures whose first header byte matches at the right
+        // offset — a 256-way bucket per headerAt instead of all signatures.
+        let matched = null;
+        for (const ha of INDEX.headerAts) {
+          const at = i + ha;
+          if (at >= search.length) continue;
+          const bucket = INDEX.byHeaderAt.get(ha)[search[at]];
+          if (!bucket.length) continue;
+          for (const sig of bucket) {
+            if (headerMatches(search, at, sig)) { matched = sig; break; }
           }
+          if (matched) break;
         }
+        if (matched) found.push({ offset: windowBase + i, sig: matched });
       }
 
       position += bytesRead;
@@ -104,7 +125,22 @@ function indexOfFrom(haystack, needle, start) {
  * Uses the footer when the signature has one, otherwise caps at the next
  * candidate header or the signature's maxSize — whichever is smaller.
  */
-async function measureFile(fd, offset, sig, nextOffset, sourceEnd) {
+async function measureFile(fd, offset, sig, nextOffset, sourceEnd, reader) {
+  // Deep-search resolver: read the file's own size metadata/structure for an
+  // exact length. This is authoritative — a measured file legitimately spans
+  // past the next candidate header (false headers often sit *inside* a video or
+  // archive), so we clamp only to the end of the source, not to nextOffset.
+  if (sig.measure && reader) {
+    try {
+      const n = await sig.measure(reader, offset, { nextOffset, sourceEnd, sig });
+      if (n && n > 0) {
+        let len = Math.floor(n);
+        if (sourceEnd && sourceEnd > offset) len = Math.min(len, sourceEnd - offset);
+        if (len > 0) return len;
+      }
+    } catch (_) { /* fall through to the heuristic below */ }
+  }
+
   const hardCap = Math.min(
     sig.maxSize,
     (sourceEnd && sourceEnd > offset ? sourceEnd - offset : sig.maxSize)
@@ -161,21 +197,33 @@ async function measureFile(fd, offset, sig, nextOffset, sourceEnd) {
  */
 async function describe(source, candidates, size, { onProgress, shouldStop } = {}) {
   const fd = await fsp.open(source, 'r');
+  const reader = makeReader(fd);
   const out = [];
   try {
     for (let i = 0; i < candidates.length; i++) {
       if (shouldStop && shouldStop()) break;
       const c = candidates[i];
       const next = candidates[i + 1] ? candidates[i + 1].offset : null;
-      const len = await measureFile(fd, c.offset, c.sig, next, size).catch(() => 0);
+
+      // Refine generic container signatures (RIFF -> wav/avi/webp, ftyp ->
+      // mp4/mov/heic…) into their real subtype before naming the file.
+      let { ext, kind, name: type } = c.sig;
+      if (c.sig.classify) {
+        try {
+          const r = await c.sig.classify(reader, c.offset);
+          if (r) { ext = r.ext || ext; kind = r.kind || kind; type = r.name || type; }
+        } catch (_) {}
+      }
+
+      const len = await measureFile(fd, c.offset, c.sig, next, size, reader).catch(() => 0);
       out.push({
         id: crypto.randomUUID(),
         offset: c.offset,
         length: len,
-        name: `${c.sig.kind}_${String(i + 1).padStart(5, '0')}.${c.sig.ext}`,
-        ext: c.sig.ext,
-        kind: c.sig.kind,
-        type: c.sig.name,
+        name: `${kind}_${String(i + 1).padStart(5, '0')}.${ext}`,
+        ext,
+        kind,
+        type,
       });
       if (onProgress) {
         onProgress({ phase: 'describe', index: i + 1, total: candidates.length });
