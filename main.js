@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, nativeImage } = require('ele
 const path = require('path');
 const os = require('os');
 const fsp = require('fs/promises');
+const { execFile } = require('child_process');
 
 const carver = require('./engine/carver');
 const trash = require('./engine/trash');
@@ -114,9 +115,60 @@ ipcMain.handle('thumb', async (_e, req) => {
 
 /* -------------------------------- carving --------------------------------- */
 
+/**
+ * Resolve a mounted volume path to its backing block device, so we can tell the
+ * user the exact device to image/carve. macOS: `diskutil info`; Linux: `findmnt`.
+ */
+function execP(cmd, args, timeout = 8000) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { timeout }, (err, stdout) => resolve({ err, out: String(stdout || '') }));
+  });
+}
+async function backingDevice(mountPath) {
+  try {
+    if (process.platform === 'darwin') {
+      const { out } = await execP('diskutil', ['info', mountPath]);
+      const m = out.match(/Device Node:\s*(\/dev\/\S+)/);
+      if (m) {
+        const dev = m[1];
+        // The raw device (/dev/rdiskN) carves much faster than the buffered one.
+        const raw = dev.replace(/^\/dev\/disk/, '/dev/rdisk');
+        return { dev, raw };
+      }
+    } else if (process.platform === 'linux') {
+      const { out } = await execP('findmnt', ['-no', 'SOURCE', mountPath]);
+      const dev = out.trim();
+      if (dev) return { dev, raw: dev };
+    }
+  } catch (_) {}
+  return null;
+}
+
 ipcMain.handle('carve-scan', async (_e, source) => {
   stopFlag = false;
   try {
+    // A mounted volume (e.g. /Volumes/NO NAME) is a directory — you can't read
+    // it as raw bytes. Detect that and guide the user instead of failing with a
+    // cryptic EISDIR.
+    let st = null;
+    try { st = await fsp.stat(source); } catch (_) {}
+    if (st && st.isDirectory()) {
+      const dev = await backingDevice(source);
+      const imgCmd = dev
+        ? `sudo dd if=${dev.raw} of=~/card.img bs=4m`
+        : 'sudo dd if=/dev/rdiskN of=~/card.img bs=4m';
+      const error = [
+        `“${source}” is a mounted volume (a folder), not a raw device or disk image.`,
+        dev ? `Its underlying device is ${dev.dev}.` : '',
+        '',
+        '• Files still on it (including items in its trash) — use the “Folder / Volume” tab on this same path.',
+        '• Deleted or formatted data — raw carving needs the device, which requires admin. Image it first:',
+        `    ${imgCmd}`,
+        '  then run a deep scan on card.img.',
+      ].filter(Boolean).join('\n');
+      return { ok: false, error, kind: 'not-carvable', suggestFolder: true, device: dev && dev.dev };
+    }
+
     const { candidates, size } = await carver.scanHeaders(source, {
       shouldStop,
       onProgress: (p) => send('progress', { task: 'carve', ...p }),
@@ -128,7 +180,13 @@ ipcMain.handle('carve-scan', async (_e, source) => {
     });
     return { ok: true, files, size };
   } catch (err) {
-    return { ok: false, error: String(err.message || err) };
+    let msg = String(err.message || err);
+    if (/EISDIR/.test(msg)) {
+      msg = `“${source}” is a folder. Use the “Folder / Volume” tab to scan a mounted drive, or pick a .dd/.img image or disk device to carve.`;
+    } else if (/EACCES|EPERM|operation not permitted/i.test(msg)) {
+      msg = `Permission denied reading “${source}”. Raw device access needs admin rights — image it first with sudo dd, or launch the app elevated.`;
+    }
+    return { ok: false, error: msg };
   }
 });
 

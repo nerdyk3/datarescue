@@ -157,6 +157,18 @@ function renderSetup(src) {
         startFolder();
       }),
     }));
+    // Carried over from the carve tab when the user picked a mounted volume:
+    // offer a one-click scan of that same path here.
+    if (state.pendingFolderRoot) {
+      const root = state.pendingFolderRoot;
+      state.pendingFolderRoot = null;
+      const hero = setup.querySelector('.hero-cta');
+      const note = el('div', 'src-path');
+      note.textContent = root;
+      const scanBtn = el('button', 'btn primary lg', 'Scan this volume');
+      scanBtn.onclick = () => { state.ctx.root = root; startFolder(); };
+      if (hero) { hero.appendChild(note); hero.appendChild(scanBtn); }
+    }
   }
 
   if (src === 'android') {
@@ -315,11 +327,26 @@ $('#stopBtn').onclick = async () => {
 
 /* ------------------------------- tasks ---------------------------------- */
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 async function startCarve() {
   showProgress('Scanning raw bytes for recoverable files…', false);
   const res = await rescue.carveScan(state.ctx.source);
   hideProgress();
-  if (!res.ok) { toast('Scan failed', res.error, 'err'); return; }
+  if (!res.ok) {
+    // Multi-line guidance (e.g. a mounted volume can't be carved) needs line
+    // breaks and more time on screen than a normal toast.
+    const body = escapeHtml(res.error).replace(/\n/g, '<br>');
+    toast('Can’t carve this source', body, 'err', res.suggestFolder ? 14000 : 7000);
+    // Offer to jump straight to the Folder / Volume scan on the same path.
+    if (res.suggestFolder && typeof selectSource === 'function') {
+      state.pendingFolderRoot = state.ctx.source;
+      selectSource('folder');
+    }
+    return;
+  }
   state.files = res.files;
   toast('Deep scan complete', `${res.files.length} recoverable files found.`, 'ok');
   renderResults();
