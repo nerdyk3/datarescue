@@ -14,6 +14,7 @@ const KIND_ICON = {
   image: '🖼️', video: '🎬', audio: '🎵', document: '📄',
   archive: '🗜️', database: '🗃️', messages: '💬', contacts: '👤',
   calls: '📞', other: '📦',
+  screenshot: '📸', camera: '📷', voice: '🎙️', backup: '🔐', trash: '🗑️',
 };
 
 const PANELS = {
