@@ -35,7 +35,10 @@ jobs:
         env:
           # No code-signing certs in CI — produce unsigned installers.
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NOTE: do NOT set GH_TOKEN here. electron-builder attaches it to its
+          # helper-binary downloads (winCodeSign/nsis/electron), and the CDN
+          # rejects the auth header with HTTP 403. The token is only needed for
+          # publishing, which happens in the separate release job.
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
