@@ -15,10 +15,10 @@
     "make:icon": "node scripts/make-icon.js",
     "bundle:adb": "node scripts/fetch-adb.js",
     "pack": "npm run bundle:adb && electron-builder --dir",
-    "dist": "npm run bundle:adb && electron-builder",
-    "dist:mac": "npm run bundle:adb && electron-builder --mac",
-    "dist:win": "npm run bundle:adb && electron-builder --win",
-    "dist:linux": "npm run bundle:adb && electron-builder --linux"
+    "dist": "npm run bundle:adb && electron-builder --publish never",
+    "dist:mac": "npm run bundle:adb && electron-builder --mac --publish never",
+    "dist:win": "npm run bundle:adb && electron-builder --win --publish never",
+    "dist:linux": "npm run bundle:adb && electron-builder --linux --publish never"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0"
@@ -62,13 +62,6 @@
       "category": "public.app-category.utilities",
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        },
-        {
           "target": "zip",
           "arch": [
             "arm64",
@@ -80,9 +73,6 @@
       "gatekeeperAssess": false,
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.plist"
-    },
-    "dmg": {
-      "title": "DataRescue ${version}"
     },
     "win": {
       "target": [

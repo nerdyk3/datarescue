@@ -27,7 +27,7 @@ Grab an installer for your OS from the [Releases page](https://github.com/nerdyk
 
 | OS | File | Notes |
 |----|------|-------|
-| **macOS** | `DataRescue-<ver>.dmg` | Universal (Apple Silicon + Intel). Unsigned — right-click → **Open** the first time. |
+| **macOS** | `DataRescue-<ver>-mac-<arch>.zip` | Apple Silicon + Intel. Unzip, move to Applications, right-click → **Open** the first time (unsigned). |
 | **Windows** | `DataRescue-<ver>-Setup.exe` | NSIS installer, choose-your-folder. |
 | **Linux** | `DataRescue-<ver>.AppImage` / `.deb` | AppImage: `chmod +x` then run. |
 
@@ -103,7 +103,7 @@ Each OS is built on its own machine (you can't cross-build the native
 
 ```bash
 npm install
-npm run dist:mac      # → dist/DataRescue-<ver>.dmg + .zip   (run on macOS)
+npm run dist:mac      # → dist/DataRescue-<ver>-mac-<arch>.zip (run on macOS)
 npm run dist:win      # → dist/DataRescue-<ver>-Setup.exe    (run on Windows)
 npm run dist:linux    # → dist/DataRescue-<ver>.AppImage/.deb (run on Linux)
 ```
