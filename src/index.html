@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; media-src 'self' file:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DataRescue</title>
   <link rel="stylesheet" href="styles.css" />
@@ -106,6 +106,16 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Media preview lightbox -->
+  <div class="lightbox" id="lightbox" hidden>
+    <div class="lb-backdrop" id="lbBackdrop"></div>
+    <div class="lb-inner">
+      <button class="lb-close" id="lbClose" aria-label="Close preview">✕</button>
+      <div class="lb-stage" id="lbStage"></div>
+      <div class="lb-cap" id="lbCap"></div>
+    </div>
   </div>
 
   <!-- Toasts -->

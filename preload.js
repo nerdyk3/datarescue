@@ -9,10 +9,13 @@ contextBridge.exposeInMainWorld('api', {
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   stop: () => ipcRenderer.invoke('stop'),
   thumb: (req) => ipcRenderer.invoke('thumb', req),
+  previewFile: (req) => ipcRenderer.invoke('preview-file', req),
+  previewCleanup: (p) => ipcRenderer.invoke('preview-cleanup', p),
 
   // carving
   carveScan: (source) => ipcRenderer.invoke('carve-scan', source),
   carveRecover: (args) => ipcRenderer.invoke('carve-recover', args),
+  carveCleanup: (imgPath) => ipcRenderer.invoke('carve-cleanup', imgPath),
 
   // trash
   trashList: () => ipcRenderer.invoke('trash-list'),
@@ -28,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
   androidPair: (args) => ipcRenderer.invoke('android-pair', args),
   androidScan: (args) => ipcRenderer.invoke('android-scan', args),
   androidPull: (args) => ipcRenderer.invoke('android-pull', args),
+  androidFetch: (args) => ipcRenderer.invoke('android-fetch', args),
 
   // ios
   iosBackups: () => ipcRenderer.invoke('ios-backups'),

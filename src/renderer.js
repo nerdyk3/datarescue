@@ -114,7 +114,7 @@ function renderSetup(src) {
     setup.appendChild(heroCard({
       art: '🖥️',
       h2: 'Deep signature carving',
-      p: 'Point DataRescue at a whole disk, an external drive, an SD card, or a <code>.dd</code>/<code>.img</code> image. It scans the raw bytes for file signatures and rebuilds photos, videos, documents and archives — independent of any filesystem. This recovers data even after formatting or deletion.',
+      p: 'Point DataRescue at a whole disk, an external drive, a mounted SD card, or a <code>.dd</code>/<code>.img</code> image. It scans the raw bytes for file signatures and rebuilds photos, videos, documents and archives — independent of any filesystem. This recovers data even after formatting or deletion. Pick a mounted card and DataRescue images it for you first (one admin prompt), then deep-scans the image.',
       meta: ['JPEG · PNG · HEIC', 'MP4 · MOV', 'PDF · DOCX · XLSX', 'ZIP · SQLite'],
       cta: primaryPick('Select disk / image', async () => {
         const p = await rescue.pickSource();
@@ -307,7 +307,10 @@ function hideProgress() {
 }
 
 rescue.onProgress((p) => {
-  if (p.phase === 'scan' && p.total > 0) {
+  if (p.phase === 'image') {
+    if (p.total > 0) setProgress((p.bytes / p.total) * 100, `Imaging card… ${fmtSize(p.bytes)} of ${fmtSize(p.total)}`);
+    else $('#progressDetail').textContent = `Imaging card… ${fmtSize(p.bytes)}`;
+  } else if (p.phase === 'scan' && p.total > 0) {
     setProgress((p.bytes / p.total) * 100, `Scanned ${fmtSize(p.bytes)} of ${fmtSize(p.total)}`);
   } else if (p.phase === 'scan' && p.current) {
     $('#progressDetail').textContent = p.current;
@@ -332,7 +335,7 @@ function escapeHtml(s) {
 }
 
 async function startCarve() {
-  showProgress('Scanning raw bytes for recoverable files…', false);
+  showProgress('Preparing deep scan…', false);
   const res = await rescue.carveScan(state.ctx.source);
   hideProgress();
   if (!res.ok) {
@@ -348,7 +351,12 @@ async function startCarve() {
     return;
   }
   state.files = res.files;
-  toast('Deep scan complete', `${res.files.length} recoverable files found.`, 'ok');
+  // If the volume was imaged first, recover + thumbnails must read the image,
+  // and we remember it so we can offer to delete it after recovery.
+  if (res.source) state.ctx.source = res.source;
+  state.ctx.imagePath = res.imagedFrom ? res.source : null;
+  const extra = res.imagedFrom ? ` Imaged ${res.imagedFrom} first.` : '';
+  toast('Deep scan complete', `${res.files.length} recoverable files found.${extra}`, 'ok');
   renderResults();
 }
 
@@ -526,7 +534,29 @@ function renderResults() {
 
 // Thumbnail plumbing -------------------------------------------------------
 const PREVIEWABLE = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp']);
+// Types the lightbox can show full-size: still images + playable video.
+const PREVIEW_IMG = new Set(['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp']);
+const PREVIEW_VID = new Set(['mp4', 'mov', 'm4v', 'webm']);
 const thumbCache = new Map(); // id -> dataURL | null (null = tried, undecodable)
+
+// Can this file open in the lightbox, and how to fetch its bytes. Android files
+// live on the device, so they're not locally previewable.
+function previewKind(f) {
+  const ext = (f.ext || '').toLowerCase();
+  if (PREVIEW_IMG.has(ext)) return 'image';
+  if (PREVIEW_VID.has(ext)) return 'video';
+  return null;
+}
+function previewReqFor(f) {
+  if (state.source === 'folder' || state.source === 'trash') return { path: f.path };
+  if (state.source === 'ios') return { path: f.diskPath };
+  if (state.source === 'carve') return { source: state.ctx.source, offset: f.offset, length: f.length, ext: f.ext };
+  if (state.source === 'android' && state.ctx.serial) return { android: true, serial: state.ctx.serial, path: f.path };
+  return null;
+}
+function canOpenPreview(f) {
+  return !!previewKind(f) && !!previewReqFor(f);
+}
 
 // Build the main-process request that yields this file's pixels, or null if
 // this source/type can't be previewed (e.g. Android remote files, HEIC/RAW).
@@ -537,7 +567,11 @@ function thumbReqFor(f) {
   if (state.source === 'carve') {
     return { source: state.ctx.source, offset: f.offset, length: f.length };
   }
-  return null; // android: file is on the device, not locally readable
+  // Android: the bytes live on the phone — pull them on demand (see loadThumb).
+  if (state.source === 'android' && state.ctx.serial) {
+    return { android: true, serial: state.ctx.serial, path: f.path };
+  }
+  return null;
 }
 
 function paintThumb(thumbEl, url) {
@@ -566,8 +600,14 @@ async function loadThumb(thumbEl) {
   }
   const f = state.files.find((x) => String(x.id) === id);
   if (!f) return;
-  const req = thumbReqFor(f);
+  let req = thumbReqFor(f);
   if (!req) { thumbCache.set(id, null); return; }
+  // Android: pull the file to a temp path first, then thumbnail from disk.
+  if (req.android) {
+    const r = await rescue.androidFetch({ serial: req.serial, path: req.path }).catch(() => null);
+    if (!r || !r.ok) { thumbCache.set(id, null); return; }
+    req = { path: r.path };
+  }
   const url = await rescue.thumb(req).catch(() => null);
   thumbCache.set(id, url || null);
   if (url && thumbEl.isConnected) paintThumb(thumbEl, url);
@@ -579,8 +619,10 @@ function fileCard(f) {
     ? new Date(f.modified || f.deletedAt).toLocaleDateString()
     : (f.type || f.ext || '');
   const canPreview = !!thumbReqFor(f);
+  const canOpen = canOpenPreview(f);
   card.innerHTML = `
     <div class="check">✓</div>
+    ${canOpen ? '<button class="preview-btn" title="Preview">👁</button>' : ''}
     <div class="thumb" data-id="${f.id}">${KIND_ICON[f.kind] || '📦'}</div>
     <div class="meta">
       <div class="fname" title="${f.name}">${f.name}</div>
@@ -591,6 +633,12 @@ function fileCard(f) {
     if (thumbObserver) thumbObserver.observe(thumbEl);
     else loadThumb(thumbEl); // no IO support: load immediately
   }
+  if (canOpen) {
+    card.querySelector('.preview-btn').onclick = (e) => {
+      e.stopPropagation(); // don't toggle selection
+      openPreview(f);
+    };
+  }
   card.onclick = () => {
     if (state.selected.has(f.id)) state.selected.delete(f.id);
     else state.selected.add(f.id);
@@ -599,6 +647,60 @@ function fileCard(f) {
   };
   return card;
 }
+
+/* ---------------------------- media lightbox ---------------------------- */
+let lbTemp = null; // temp file to clean up when the lightbox closes
+
+function fileUrl(p) { return 'file://' + encodeURI(p).replace(/#/g, '%23').replace(/\?/g, '%3F'); }
+
+async function openPreview(f) {
+  const kind = previewKind(f);
+  const req = previewReqFor(f);
+  if (!kind || !req) return;
+  const stage = $('#lbStage');
+  const cap = $('#lbCap');
+  const loadingMsg = req.android ? 'Pulling from phone…' : 'Loading preview…';
+  stage.innerHTML = `<div class="lb-msg"><span class="spinner"></span> ${loadingMsg}</div>`;
+  cap.textContent = f.name;
+  $('#lightbox').hidden = false;
+
+  // Android files are pulled over ADB first; everything else resolves directly.
+  const res = req.android
+    ? await rescue.androidFetch({ serial: req.serial, path: req.path }).catch((e) => ({ ok: false, error: String(e) }))
+    : await rescue.previewFile(req).catch((e) => ({ ok: false, error: String(e) }));
+  if (!res || !res.ok) {
+    stage.innerHTML = `<div class="lb-msg">Couldn’t load preview: ${escapeHtml(res ? res.error : 'unknown')}</div>`;
+    return;
+  }
+  // Remember a temp extraction so we can delete it on close.
+  lbTemp = res.temp ? res.path : null;
+  const url = fileUrl(res.path);
+
+  if (kind === 'video') {
+    stage.innerHTML =
+      `<video controls autoplay playsinline src="${url}"></video>`;
+    const v = stage.querySelector('video');
+    v.onerror = () => { stage.innerHTML = '<div class="lb-msg">This video can’t be decoded (unsupported codec).</div>'; };
+  } else {
+    stage.innerHTML = `<img alt="${escapeHtml(f.name)}" src="${url}" />`;
+    const img = stage.querySelector('img');
+    img.onerror = () => { stage.innerHTML = '<div class="lb-msg">This image can’t be decoded (e.g. HEIC/RAW).</div>'; };
+  }
+}
+
+async function closePreview() {
+  const lb = $('#lightbox');
+  if (lb.hidden) return;
+  const v = lb.querySelector('video');
+  if (v) { try { v.pause(); } catch (_) {} }
+  $('#lbStage').innerHTML = '';
+  lb.hidden = true;
+  if (lbTemp) { const p = lbTemp; lbTemp = null; rescue.previewCleanup(p).catch(() => {}); }
+}
+
+$('#lbClose').onclick = closePreview;
+$('#lbBackdrop').onclick = closePreview;
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePreview(); });
 
 function updateCount() {
   const n = state.selected.size;
@@ -642,6 +744,26 @@ $('#recoverBtn').onclick = async () => {
   toast('Recovery complete', `${ok}/${res.results.length} files saved. Click to open the folder.`, 'ok', 7000);
   const last = $('#toasts').lastChild;
   if (last) { last.style.cursor = 'pointer'; last.onclick = () => rescue.openPath(res.outputDir); }
+
+  // If we imaged a card for this scan, offer to delete the image and reclaim space.
+  if (state.source === 'carve' && state.ctx.imagePath) {
+    const img = state.ctx.imagePath;
+    toast('Disk image still on disk', `A copy of the card was saved to “${img}”. Click to delete it and free space.`, 'warn', 15000);
+    const t = $('#toasts').lastChild;
+    if (t) {
+      t.style.cursor = 'pointer';
+      t.onclick = async () => {
+        t.onclick = null;
+        const r = await rescue.carveCleanup(img).catch((e) => ({ ok: false, error: String(e) }));
+        if (r && r.ok) {
+          state.ctx.imagePath = null;
+          toast('Image deleted', `Freed ${fmtSize(r.freed || 0)}.`, 'ok');
+        } else {
+          toast('Could not delete image', (r && r.error) || 'Unknown error', 'err');
+        }
+      };
+    }
+  }
 };
 
 /* -------------------------------- boot ---------------------------------- */

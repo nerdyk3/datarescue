@@ -360,4 +360,22 @@ async function pull(serial, files, outputDir, { onProgress } = {}) {
   return results;
 }
 
-module.exports = { status, scan, pull, connect, pair, resetServer };
+/**
+ * Pull a single device file to a temp path so the UI can thumbnail or preview it
+ * without recovering it. adb has no server-side resize, so this fetches the whole
+ * file; callers cache by device path and fetch lazily (only what's on screen).
+ */
+async function fetchOne(serial, devicePath, { timeout = 120000 } = {}) {
+  const adb = await which('adb');
+  if (!adb) throw new Error('adb not found');
+  const base = serial ? ['-s', serial] : [];
+  const dir = path.join(os.tmpdir(), 'datarescue-android');
+  await fsp.mkdir(dir, { recursive: true });
+  const safe = String(devicePath).replace(/[^\w.-]+/g, '_').slice(-80);
+  const dest = path.join(dir, `${Date.now()}-${safe}`);
+  const res = await run(adb, [...base, 'pull', devicePath, dest], { timeout });
+  if (res.code !== 0) throw new Error(res.err || 'adb pull failed');
+  return dest;
+}
+
+module.exports = { status, scan, pull, connect, pair, resetServer, fetchOne };
