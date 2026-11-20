@@ -18,6 +18,8 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
+const { classify } = require('./categorize');
 
 function backupRoot() {
   const home = os.homedir();
@@ -74,10 +76,14 @@ async function listBackups() {
       }
     } catch (_) {}
 
+    const manifestMbdb = path.join(dir, 'Manifest.mbdb');
+    const hasMbdb = fs.existsSync(manifestMbdb);
+
     backups.push({
       udid,
       dir,
-      hasManifest: fs.existsSync(manifestDb),
+      hasManifest: fs.existsSync(manifestDb) || hasMbdb,
+      legacy: !fs.existsSync(manifestDb) && hasMbdb,
       encrypted,
       deviceName: info.deviceName || 'iPhone / iPad',
       product: info.product || '',
@@ -98,28 +104,134 @@ function loadSqlite() {
 }
 
 const DOMAIN_KIND = (domain, rel) => {
-  const r = (rel || '').toLowerCase();
-  if (domain.includes('CameraRollDomain') || /\.(jpg|jpeg|png|heic|mov|mp4|gif)$/.test(r)) {
-    return /\.(mov|mp4)$/.test(r) ? 'video' : 'image';
+  const d = String(domain || '');
+  const r = String(rel || '');
+  const rl = r.toLowerCase();
+  const ext = rl.includes('.') ? rl.split('.').pop() : '';
+
+  // iOS-specific app databases (no equivalent on other platforms).
+  if (rl.endsWith('sms.db') || /SMS/i.test(d)) return 'messages';
+  if (rl.endsWith('addressbook.sqlitedb') || /AddressBook/i.test(d)) return 'contacts';
+  if (rl.endsWith('call_history.db') || rl.endsWith('callhistory.storedata') || /CallHistory/i.test(d)) return 'calls';
+  if (/VoiceMemos/i.test(d) || /(^|\/)recordings\//.test(rl)) return 'voice';
+
+  // Camera roll: on iOS, PNGs are overwhelmingly screenshots; stills vs clips.
+  if (/CameraRoll/i.test(d) || /(^|\/)dcim\//.test(rl)) {
+    if (ext === 'png') return 'screenshot';
+    if (['mov', 'mp4', 'm4v'].includes(ext)) return 'video';
+    if (['jpg', 'jpeg', 'heic', 'heif', 'gif', 'dng'].includes(ext)) return 'camera';
   }
-  if (r.endsWith('sms.db') || domain.includes('SMS')) return 'messages';
-  if (r.endsWith('addressbook.sqlitedb') || domain.includes('AddressBook')) return 'contacts';
-  if (r.endsWith('call_history.db') || domain.includes('CallHistory')) return 'calls';
-  if (/\.(pdf|doc|docx|txt|pages)$/.test(r)) return 'document';
-  if (/\.(mp3|m4a|wav)$/.test(r)) return 'audio';
-  if (/\.(sqlitedb|db|sqlite)$/.test(r)) return 'database';
-  return 'other';
+
+  // Fall back to the shared path/extension classifier for everything else.
+  return classify(r, ext);
 };
 
+/**
+ * Parse a legacy (iOS 5–9) Manifest.mbdb binary index. These backups predate
+ * Manifest.db (SQLite) and would otherwise recover nothing. The on-disk file for
+ * each entry is named by SHA1("<domain>-<relativePath>") and stored flat in the
+ * backup folder (no 2-char subdirectories).
+ *
+ * Record layout (all integers big-endian), after the 6-byte "mbdb\x05\x00" magic:
+ *   domain, path, linkTarget, dataHash, encKey  (length-prefixed strings)
+ *   mode u16, unknown u32, unknown u32, uid u32, gid u32,
+ *   mtime u32, atime u32, ctime u32, fileLen u64, flag u8, nProps u8,
+ *   then nProps × (name, value) strings.
+ */
+function parseMbdb(buf) {
+  if (buf.length < 6 || buf.toString('latin1', 0, 4) !== 'mbdb') return [];
+  let off = 6;
+  const out = [];
+  const readStr = () => {
+    if (off + 2 > buf.length) { off = buf.length; return null; }
+    const len = buf.readUInt16BE(off);
+    off += 2;
+    if (len === 0xffff) return Buffer.alloc(0); // nil
+    const s = buf.subarray(off, off + len);
+    off += len;
+    return s;
+  };
+  const readInt = (n) => {
+    let v = 0;
+    for (let i = 0; i < n; i++) v = v * 256 + (buf[off + i] || 0);
+    off += n;
+    return v;
+  };
+  while (off < buf.length) {
+    const domain = readStr();
+    const rel = readStr();
+    if (domain === null || rel === null) break;
+    readStr(); readStr(); readStr();          // linkTarget, dataHash, encKey
+    const mode = readInt(2);
+    readInt(4); readInt(4); readInt(4); readInt(4); // unknown, unknown, uid, gid
+    const mtime = readInt(4);
+    readInt(4); readInt(4);                    // atime, ctime
+    const fileLen = readInt(8);
+    readInt(1);                                // flag
+    const nProps = readInt(1);
+    for (let i = 0; i < nProps; i++) { readStr(); readStr(); }
+    if (off > buf.length) break;
+    // Regular files only (S_IFREG = 0x8000).
+    if ((mode & 0xf000) !== 0x8000) continue;
+    const fileID = crypto.createHash('sha1')
+      .update(Buffer.concat([domain, Buffer.from('-'), rel]))
+      .digest('hex');
+    out.push({
+      fileID,
+      domain: domain.toString('utf8'),
+      relativePath: rel.toString('utf8'),
+      size: fileLen,
+      mtime: mtime ? new Date(mtime * 1000).toISOString() : null,
+    });
+  }
+  return out;
+}
+
+function scanLegacyBackup(dir, { kinds = null } = {}) {
+  const mbdbPath = path.join(dir, 'Manifest.mbdb');
+  const buf = fs.readFileSync(mbdbPath);
+  const rows = parseMbdb(buf);
+  const files = rows.map((r) => {
+    const kind = DOMAIN_KIND(r.domain, r.relativePath);
+    // Legacy backups store the hashed file flat in the backup directory.
+    let diskPath = path.join(dir, r.fileID);
+    if (!fs.existsSync(diskPath)) {
+      // A few late iOS 9 backups already use the 2-char subdir layout.
+      const nested = path.join(dir, r.fileID.slice(0, 2), r.fileID);
+      if (fs.existsSync(nested)) diskPath = nested;
+    }
+    let size = r.size || 0;
+    if (!size) { try { size = fs.statSync(diskPath).size; } catch (_) {} }
+    return {
+      id: r.fileID,
+      name: path.basename(r.relativePath || r.fileID),
+      relativePath: r.relativePath,
+      domain: r.domain,
+      diskPath,
+      size,
+      kind,
+    };
+  }).filter((f) => (kinds && kinds.length ? kinds.includes(f.kind) : true));
+  return { files, count: files.length };
+}
+
 async function scanBackup(udid, { kinds = null } = {}) {
+  const root = backupRoot();
+  const dir = path.join(root, udid);
+  const manifestDb = path.join(dir, 'Manifest.db');
+
+  // Legacy (iOS 5–9) backups: no SQLite manifest, parse Manifest.mbdb instead.
+  if (!fs.existsSync(manifestDb)) {
+    if (fs.existsSync(path.join(dir, 'Manifest.mbdb'))) {
+      return scanLegacyBackup(dir, { kinds });
+    }
+    throw new Error('No Manifest.db or Manifest.mbdb found for this backup.');
+  }
+
   const Database = loadSqlite();
   if (!Database) {
     throw new Error('better-sqlite3 is not built. Run: npm run rebuild');
   }
-  const root = backupRoot();
-  const dir = path.join(root, udid);
-  const manifestDb = path.join(dir, 'Manifest.db');
-  if (!fs.existsSync(manifestDb)) throw new Error('Manifest.db not found for this backup.');
 
   let db;
   try {
@@ -174,4 +286,4 @@ async function extract(udid, files, outputDir) {
   return results;
 }
 
-module.exports = { listBackups, scanBackup, extract, backupRoot };
+module.exports = { listBackups, scanBackup, extract, backupRoot, parseMbdb };

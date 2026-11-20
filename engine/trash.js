@@ -9,6 +9,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const { classify, isNoise } = require('./categorize');
 
 function trashLocations() {
   const home = os.homedir();
@@ -27,18 +28,8 @@ function trashLocations() {
   ];
 }
 
-function categorise(ext) {
-  ext = ext.toLowerCase().replace('.', '');
-  if (['jpg', 'jpeg', 'png', 'gif', 'heic', 'bmp', 'tiff', 'webp'].includes(ext)) return 'image';
-  if (['mp4', 'mov', 'avi', 'mkv', 'm4v', 'wmv'].includes(ext)) return 'video';
-  if (['mp3', 'wav', 'm4a', 'flac', 'aac'].includes(ext)) return 'audio';
-  if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'pages'].includes(ext)) return 'document';
-  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return 'archive';
-  return 'other';
-}
-
 async function walk(dir, acc, depth = 0) {
-  if (depth > 6) return;
+  if (depth > 20) return;
   let entries;
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -48,18 +39,23 @@ async function walk(dir, acc, depth = 0) {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     try {
+      if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
         await walk(full, acc, depth + 1);
       } else if (e.isFile()) {
+        if (isNoise(e.name)) continue;
         const st = await fsp.stat(full);
-        const ext = path.extname(e.name);
+        const ext = path.extname(e.name).replace('.', '').toLowerCase();
         acc.push({
           id: `${st.ino}-${st.size}`,
           name: e.name,
           path: full,
           size: st.size,
-          ext: ext.replace('.', '').toLowerCase(),
-          kind: categorise(ext),
+          ext,
+          // Everything here is deleted; keep the TYPE category (image, video,
+          // screenshot, voice, backup…) so the trash can still be filtered.
+          kind: classify(full, ext, { trash: false }),
+          deleted: true,
           deletedAt: st.mtime.toISOString(),
         });
       }

@@ -15,6 +15,7 @@ const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
+const { classify, isTrash, isNoise } = require('./categorize');
 
 const EXE = process.platform === 'win32' ? 'adb.exe' : 'adb';
 
@@ -223,61 +224,118 @@ async function pair(hostPort, code) {
   return { ok, message: text || 'No response from adb pair.' };
 }
 
-const MEDIA_DIRS = [
-  '/sdcard/DCIM',
-  '/sdcard/Pictures',
-  '/sdcard/Movies',
-  '/sdcard/Music',
-  '/sdcard/Download',
-  '/sdcard/WhatsApp',
-  '/sdcard/Documents',
-];
+/**
+ * Discover every shared-storage root on the phone: primary (/sdcard) plus any
+ * removable SD card / USB-OTG volume mounted under /storage (e.g. "1A2B-3C4D").
+ *
+ * We deliberately keep "/sdcard" (a symlink to the primary volume) and skip the
+ * /storage aliases that point back at the same files — "self", "emulated" and
+ * OEM encrypted mirrors like Samsung's "enc_emulated" — so files aren't listed
+ * twice under two paths.
+ */
+async function storageRoots(adb, base) {
+  const roots = ['/sdcard'];
+  const res = await run(adb, [...base, 'shell', 'ls', '/storage'], { timeout: 8000 });
+  if (res.code === 0) {
+    for (const raw of res.out.split(/\r?\n/)) {
+      const name = raw.trim();
+      if (!name) continue;
+      if (name === 'self' || name === 'emulated' || name.startsWith('enc_')) continue;
+      roots.push(`/storage/${name}`);
+    }
+  }
+  return [...new Set(roots)];
+}
 
-function kindFromExt(ext) {
-  ext = ext.toLowerCase();
-  if (['jpg', 'jpeg', 'png', 'gif', 'heic', 'webp'].includes(ext)) return 'image';
-  if (['mp4', 'mov', '3gp', 'mkv'].includes(ext)) return 'video';
-  if (['mp3', 'm4a', 'wav', 'ogg'].includes(ext)) return 'audio';
-  if (['pdf', 'doc', 'docx', 'txt'].includes(ext)) return 'document';
-  return 'other';
+/**
+ * Enumerate every regular file under one storage root.
+ *
+ * Two device realities shaped this:
+ *   1. /sdcard is a SYMLINK (-> /storage/self/primary). Android's toybox `find`
+ *      will NOT descend into a symlink given as the start path, so `find /sdcard`
+ *      returns nothing. `find -L` follows it and lists the whole tree.
+ *   2. toybox `find` has no `-printf`. We get size + mtime by batching the paths
+ *      into `stat -c` via `-exec … {} +` (one extra process, not one per file).
+ * If `stat`/`-exec +` aren't available (very old busybox), we fall back to a
+ * bare `find -L` that still returns every path (size/mtime unknown).
+ */
+async function listRoot(adb, base, root) {
+  // Fields are size|mtime|path. Path is last, so splitting on the first two
+  // pipes is safe even if a filename itself contains a pipe (size/mtime are
+  // always plain digits). A pipe delimiter avoids escaping entirely — toybox
+  // stat does NOT expand '\t', it would print it literally.
+  const parse = (lines, hasMeta) => lines.map((line) => {
+    if (hasMeta) {
+      const b1 = line.indexOf('|');
+      const b2 = line.indexOf('|', b1 + 1);
+      if (b1 === -1 || b2 === -1) return null;
+      return { size: line.slice(0, b1), mtime: line.slice(b1 + 1, b2), p: line.slice(b2 + 1) };
+    }
+    return { size: '0', mtime: '0', p: line };
+  }).filter(Boolean);
+
+  // Pass the whole pipeline as ONE shell string so our quoting survives. If we
+  // handed adb separate argv tokens, adb would re-join them unquoted and the
+  // device shell would treat the pipe as a real pipe. Single-quoting the format
+  // keeps '%s|%Y|%n' as one literal argument to stat.
+  const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
+  // Primary: find -L (follow the /sdcard symlink) + batched stat for
+  // size|mtime|path. '-exec … {} +' batches all paths into one stat process.
+  const cmd = `find -L ${q(root)} -type f -exec stat -c '%s|%Y|%n' {} + 2>/dev/null`;
+  const res = await run(adb, [...base, 'shell', cmd], { timeout: 300000 });
+  let rows = parse(res.out.split(/\r?\n/).filter(Boolean), true);
+
+  // Fallback for very old busybox without stat/-exec +: bare path list only.
+  if (!rows.length) {
+    const cmd2 = `find -L ${q(root)} -type f 2>/dev/null`;
+    const res2 = await run(adb, [...base, 'shell', cmd2], { timeout: 300000 });
+    rows = parse(res2.out.split(/\r?\n/).filter(Boolean), false);
+  }
+  return rows;
 }
 
 async function scan(serial, { onProgress } = {}) {
   const adb = await which('adb');
   if (!adb) throw new Error('adb not found');
   const base = serial ? ['-s', serial] : [];
+
+  const roots = await storageRoots(adb, base);
   const files = [];
-  for (const dir of MEDIA_DIRS) {
-    if (onProgress) onProgress({ phase: 'scan', current: dir });
-    // `find` with printf gives us size + mtime in one shot.
-    const res = await run(adb, [
-      ...base, 'shell', 'find', dir, '-type', 'f',
-      '-printf', '%s\\t%T@\\t%p\\n',
-    ]);
-    let lines = res.out.split(/\r?\n/).filter(Boolean);
-    // Some busybox builds lack -printf; fall back to plain find.
-    if (res.code !== 0 || (lines.length && !lines[0].includes('\t'))) {
-      const res2 = await run(adb, [...base, 'shell', 'find', dir, '-type', 'f']);
-      lines = res2.out.split(/\r?\n/).filter(Boolean).map((p) => `0\t0\t${p}`);
-    }
-    for (const line of lines) {
-      const [size, mtime, ...pathParts] = line.split('\t');
-      const p = pathParts.join('\t');
-      if (!p) continue;
+  const seen = new Set();
+
+  for (const root of roots) {
+    if (onProgress) onProgress({ phase: 'scan', current: root });
+    const rows = await listRoot(adb, base, root);
+    for (const { size, mtime, p } of rows) {
+      if (!p || seen.has(p)) continue;
+      const base2 = path.basename(p);
+      // `.nomedia` markers and OS junk are empty flags, not recoverable content.
+      if (isNoise(base2)) continue;
+      const trash = isTrash(p, base2);
+      // App sandboxes under Android/data and Android/obb are mostly caches and
+      // usually permission-denied without root — skip them UNLESS the file sits
+      // in a recycle bin there (deleted user files we DO want), e.g. Samsung My
+      // Files trash. Android/media (real user media) is not under /data and is
+      // always kept.
+      if (/\/Android\/(data|obb)\//.test(p) && !trash) continue;
+      seen.add(p);
       const ext = path.extname(p).replace('.', '').toLowerCase();
       files.push({
         id: p,
-        name: path.basename(p),
+        name: base2,
         path: p,
         size: parseInt(size, 10) || 0,
         ext,
-        kind: kindFromExt(ext),
+        kind: classify(p, ext, { trash }),
+        deleted: trash || undefined,
         modified: mtime && mtime !== '0'
-          ? new Date(parseFloat(mtime) * 1000).toISOString()
+          ? new Date(parseInt(mtime, 10) * 1000).toISOString()
           : null,
       });
     }
   }
+  files.sort((a, b) => new Date(b.modified || 0) - new Date(a.modified || 0));
   return { files, count: files.length };
 }
 

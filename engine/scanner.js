@@ -9,31 +9,26 @@
 
 const fsp = require('fs/promises');
 const path = require('path');
+const { classify, typeFromExt, isTrash, isNoise } = require('./categorize');
 
-const KIND_MAP = {
-  image: ['jpg', 'jpeg', 'png', 'gif', 'heic', 'bmp', 'tiff', 'tif', 'webp', 'raw', 'cr2', 'nef', 'dng'],
-  video: ['mp4', 'mov', 'avi', 'mkv', 'm4v', 'wmv', '3gp', 'flv'],
-  audio: ['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'wma'],
-  document: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'pages', 'numbers', 'key', 'csv', 'md'],
-  archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'],
-  database: ['sqlite', 'db', 'sql'],
-};
+// Kept for back-compat with any caller importing kindOf.
+const kindOf = typeFromExt;
 
-function kindOf(ext) {
-  ext = ext.toLowerCase().replace('.', '');
-  for (const [kind, list] of Object.entries(KIND_MAP)) {
-    if (list.includes(ext)) return kind;
-  }
-  return 'other';
-}
+// Pseudo / volatile directories that are never user data and can loop or hang a
+// walk. We deliberately do NOT skip dot-directories any more — hidden folders
+// (.thumbnails, .Trash, app data, DCIM/.pending…) are exactly where "missing"
+// files hide — only these true system mounts and build-noise dirs.
+const SKIP_ABS = ['/proc', '/sys', '/dev'];
+const SKIP_NAMES = new Set(['node_modules', '.git', '.svn', '.hg']);
 
-async function scanFolder(root, { onProgress, shouldStop, kinds = null, maxDepth = 12 } = {}) {
+async function scanFolder(root, { onProgress, shouldStop, kinds = null, maxDepth = 40 } = {}) {
   const files = [];
   let seen = 0;
 
   async function walk(dir, depth) {
     if (depth > maxDepth) return;
     if (shouldStop && shouldStop()) return;
+    if (SKIP_ABS.some((p) => dir === p || dir.startsWith(p + path.sep))) return;
     let entries;
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -42,14 +37,16 @@ async function scanFolder(root, { onProgress, shouldStop, kinds = null, maxDepth
     }
     for (const e of entries) {
       if (shouldStop && shouldStop()) return;
-      if (e.name.startsWith('.') && e.isDirectory()) continue; // skip dot-dirs
       const full = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
+        if (SKIP_NAMES.has(e.name)) continue; // noise, not user data
         await walk(full, depth + 1);
       } else if (e.isFile()) {
+        if (isNoise(e.name)) continue; // .DS_Store, Thumbs.db, .nomedia…
         const ext = path.extname(e.name).replace('.', '').toLowerCase();
-        const kind = kindOf(ext);
+        const deleted = isTrash(full, e.name);
+        const kind = classify(full, ext, { trash: deleted });
         if (kinds && kinds.length && !kinds.includes(kind)) continue;
         let st;
         try {
@@ -64,6 +61,7 @@ async function scanFolder(root, { onProgress, shouldStop, kinds = null, maxDepth
           size: st.size,
           ext,
           kind,
+          deleted: deleted || undefined,
           modified: st.mtime.toISOString(),
         });
         seen++;
